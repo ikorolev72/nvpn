@@ -1,0 +1,133 @@
+#!/bin/bash
+# korolev-ia [at] yandex.ru
+# start/stop openvpn with nordvpn 
+# 2016.01.18
+# v1.1
+
+NVPN_PASSFILE=/root/auth.txt
+NVPN_DIR=/opt/nvpn
+VPN_CONFIG_DIR=${NVPN_DIR}/config
+VAR_DIR=${NVPN_DIR}/var
+[ -d $VAR_DIR ] || mkdir -p $VAR_DIR
+[ -d $VPN_CONFIG_DIR ] || mkdir -p $VPN_CONFIG_DIR
+
+if [ -f $2 ]; then
+	CONFIG_OVPN=$2
+else
+	CONFIG_OVPN="${VPN_CONFIG_DIR}/${2}"
+fi
+
+
+
+OPENVPN=/usr/sbin/openvpn
+PID=$VAR_DIR/openvpn.pid
+
+clear_iptables_rules()
+{
+		iptables -F
+		iptables -X
+		iptables -t nat -F
+		iptables -t nat -X
+		iptables -t mangle -F
+		iptables -t mangle -X
+		iptables -P INPUT ACCEPT
+		iptables -P FORWARD ACCEPT
+		iptables -P OUTPUT ACCEPT
+
+}
+
+do_start() {
+        if [ ! -f $CONFIG_OVPN ]; then
+                echo "Cannot open config file $CONFIG_OVPN "
+                help
+                exit 1
+        fi
+
+		echo  "Starting openvpn"
+		
+		# save path to starting ovpn config  
+			echo $CONFIG_OVPN > $VAR_DIR/openvpn_conf.txt
+		
+		# save iptables rules and forwarding settings
+			/sbin/iptables-save > ${VAR_DIR}/iptables.backup
+			echo `cat /proc/sys/net/ipv4/ip_forward` > ${VAR_DIR}/ip_forward
+					
+		# clear all previrous rules of iptables
+			clear_iptables_rules
+			
+		# start openvpn with preffered config file and demonise it
+			if [ -f $NVPN_PASSFILE ] ;then
+				$OPENVPN --pull --writepid $PID --daemon --config  $CONFIG_OVPN --auth-user-pass $NVPN_PASSFILE
+			else
+				$OPENVPN --pull --writepid $PID --daemon --config  $CONFIG_OVPN
+			fi
+			
+		# waiting for start network adapter tun0
+			sleep 10
+		# forwarding, nat, masquerade
+			echo 1 > /proc/sys/net/ipv4/ip_forward		
+			iptables -A FORWARD -i eth1 -j ACCEPT
+			iptables -t nat -A POSTROUTING -o tun0 -j MASQUERADE
+			iptables -t nat -A POSTROUTING -s 192.168.0.0/24 -j MASQUERADE
+			
+			
+			
+		##################### iptables rules #####################
+		######              add your rules here            #######
+		######              add your rules here            #######
+		######              add your rules here            #######
+		######              add your rules here            #######
+		##########################################################
+		
+}
+
+do_stop() {
+    echo  "Stopping openvpn"
+	ps -p `cat $PID` -o cmd -h | grep openvpn >/dev/null 2>&1 
+	if [ $? -eq 0 ]; then
+		kill -9 `cat $PID` >/dev/null 2>&1
+		echo "Stoped" 
+	else  
+		echo "Someting wrong"
+		exit 2
+	fi
+
+   	RETVAL=$?
+	clear_iptables_rules
+	/sbin/iptables-restore < ${VAR_DIR}/iptables.backup
+	echo `cat ${VAR_DIR}/ip_forward` > /proc/sys/net/ipv4/ip_forward 
+
+	# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        # force option, stop all instances of openvpn
+        # comment it if you will start more than one instance
+        pkill -9 openvpn > /dev/null 2>&1
+
+
+    return $RETVAL
+}  
+
+help (){
+    echo "Usage: $0 { start config.ovpn  | stop | restart } " >&2
+}
+
+case "$1" in
+  start)
+		do_start		
+        ;;
+  stop)
+		do_stop
+		exit $RETVAL
+		;;
+  restart)
+		$0 stop
+		$0 start `cat $VAR_DIR/openvpn_conf.txt`
+		;;
+  *)
+	help
+        exit 3
+        ;;
+esac
+
+exit 0
+
+
